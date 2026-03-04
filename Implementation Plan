@@ -1,0 +1,166 @@
+
+
+1) Define the product scope
+
+Goal: An interactive Streamlit dashboard that:
+	•	lets a user choose a set of World Bank indicators (e.g., GDP per capita, life expectancy, CO₂ per capita, school enrollment)
+	•	chooses a year (or a range, like “latest available”)
+	•	clusters countries based on those features
+	•	shows the clusters in 2D (PCA/UMAP), in a table, and optionally on a world map
+
+MVP screens
+	•	Sidebar: indicator picker, year picker, missing-data strategy, scaling toggle, clustering algorithm + parameters
+	•	Main: cluster scatterplot (2D), cluster summary table, country drill-down
+
+⸻
+
+2) Data access approach (don’t scrape the HTML)
+
+2.1 Country list
+
+Use the Country endpoint to list countries/economies and their metadata (region, income level, etc.).  ￼
+	•	Endpoint: https://api.worldbank.org/v2/country?format=json
+	•	Filter out aggregates if needed (the API includes aggregate “regions” too: you’ll typically exclude those for country clustering).
+
+2.2 Indicator time series per country
+
+Use the Indicators API (v2) to fetch indicator values.  ￼
+	•	Pattern: https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json
+	•	You can constrain dates: ...&date=2015:2024
+	•	Handle pagination (World Bank API often paginates).
+
+2.3 Licensing / attribution
+
+World Bank indicator pages typically state licensing (commonly CC BY 4.0) and sources: include an “About / Sources” section in the app that links to the indicators used.  ￼
+
+⸻
+
+3) Data pipeline design
+
+3.1 Choose indicators (feature set)
+
+Start with ~6–12 indicators spanning different domains:
+	•	Economy: GDP per capita, inflation, unemployment
+	•	Health: life expectancy, infant mortality
+	•	Environment: CO₂ emissions per capita
+	•	Education: school enrollment
+
+(You can let the user select indicators at runtime, but also provide curated presets like “Development basics”, “Climate & energy”, etc.)
+
+3.2 Build a “country × features” matrix for clustering
+
+For a selected year (or “latest available”):
+	1.	Pull each indicator series per country
+	2.	Extract the value for the chosen year: if missing, optionally take the nearest year within a tolerance window (e.g., ±2 years)
+	3.	Produce a dataframe like:
+
+country_code | country_name | region | income_level | INDICATOR_1 | INDICATOR_2 | ...
+
+3.3 Missing data strategy (user-selectable)
+
+Offer 2–3 options:
+	•	Drop countries with >X% missing
+	•	Impute with median (per-indicator)
+	•	KNN imputation (optional, heavier)
+
+3.4 Scaling / transforms (important for clustering)
+
+Most indicators are on wildly different scales:
+	•	Default: Standardize features (z-score)
+	•	Optional: log-transform for skewed indicators (GDP, population)
+
+⸻
+
+4) Clustering approach
+
+Implement at least two algorithms:
+
+4.1 K-means (fast, good baseline)
+	•	User controls: K
+	•	Show: elbow curve / silhouette score suggestion (optional)
+
+4.2 Hierarchical clustering (interpretable)
+	•	Linkage: ward/average
+	•	User controls: number of clusters or distance threshold
+	•	Bonus: dendrogram (optional)
+
+(DBSCAN/HDBSCAN can be added later for “density” clusters, but start with K-means + hierarchical.)
+
+4.3 Dimensionality reduction for visualization
+
+For the 2D scatter:
+	•	PCA (simple and fast)
+	•	Optional later: UMAP for nicer separation (extra dependency)
+
+Plot points colored by cluster; hover shows country + values.
+
+⸻
+
+5) Streamlit app architecture
+
+5.1 Repo structure
+	•	app.py (Streamlit entry)
+	•	wb_client.py (World Bank API client: country list, indicator fetch, pagination)
+	•	features.py (build feature matrix, missing handling)
+	•	models.py (scaling, clustering, PCA)
+	•	viz.py (plots, tables)
+	•	data_cache/ (optional local parquet cache)
+
+5.2 Caching and performance
+
+Use Streamlit caching aggressively:
+	•	Cache country list (rarely changes)
+	•	Cache raw indicator pulls keyed by (indicator, date_range)
+	•	Cache feature matrix keyed by (indicator_set, year, missing_strategy)
+
+This avoids re-downloading on every widget change.
+
+5.3 UI layout (recommended)
+
+Sidebar
+	•	Country filters: region, income level (from metadata)
+	•	Indicator multi-select (and presets)
+	•	Year selector + “latest available” toggle
+	•	Preprocessing: scaling, log-transform, missing strategy
+	•	Clustering: algorithm, K (or threshold)
+
+Main
+	•	KPI row: # countries included, # indicators, % missing removed
+	•	Scatterplot (PCA 2D) + cluster legend
+	•	Cluster summary table (mean/median of features per cluster)
+	•	Country drill-down (select a country → show its indicator time series)
+
+⸻
+
+6) Implementation steps (sequence)
+	1.	Prototype the World Bank API client
+	•	get_countries() from the country endpoint  ￼
+	•	get_indicator(country, indicator, date_range) using v2 endpoints  ￼
+	•	Pagination support
+	2.	Build the feature-matrix builder
+	•	Input: indicator list + year mode (“specific year” or “latest”)
+	•	Output: clean dataframe ready for clustering
+	3.	Add preprocessing
+	•	missing handling
+	•	scaling + optional log transforms
+	4.	Add clustering + PCA
+	•	return labels, cluster centers (if applicable), PCA coordinates
+	5.	Create Streamlit UI
+	•	sidebar controls → recompute pipeline
+	•	interactive plots + tables
+	6.	Add attribution panel
+	•	show indicator names, codes, and links
+	•	cite license/source note behavior (per indicator page)  ￼
+	7.	Deployment
+	•	Streamlit Community Cloud or any container host
+	•	Store secrets if needed (World Bank API generally doesn’t require keys for Indicators)
+
+⸻
+
+7) Stretch goals
+	•	World map choropleth of clusters (needs country geometries: use Natural Earth GeoJSON)
+	•	Save/export: “Download clustered dataset as CSV”
+	•	Compare years: animate clusters across time
+	•	Add robust “latest year” logic per-indicator (since indicators update on different schedules)
+
+⸻
